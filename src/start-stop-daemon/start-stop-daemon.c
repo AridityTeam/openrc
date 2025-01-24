@@ -31,7 +31,6 @@
 #include <getopt.h>
 #include <limits.h>
 #include <grp.h>
-#include <pthread.h>
 #include <pwd.h>
 #include <sched.h>
 #include <signal.h>
@@ -40,7 +39,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <syslog.h>
 #include <sys/ioctl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -62,7 +60,7 @@
 static struct pam_conv conv = { NULL, NULL};
 #endif
 
-#ifdef __linux__
+#ifdef HAVE_CAP
 # include <sys/capability.h>
 #endif
 
@@ -343,7 +341,7 @@ int main(int argc, char **argv)
 	unsigned int start_wait = 0;
 	const char *scheduler = NULL;
 	int sched_prio = -1;
-#ifdef __linux__
+#ifdef HAVE_CAP
 	cap_iab_t cap_iab = NULL;
 	unsigned secbits = 0;
 #endif
@@ -360,11 +358,6 @@ int main(int argc, char **argv)
 	signal_setup(SIGINT, handle_signal);
 	signal_setup(SIGQUIT, handle_signal);
 	signal_setup(SIGTERM, handle_signal);
-
-	if (rc_yesno(getenv("RC_USER_SERVICES")))
-		rc_set_user();
-
-	openlog(applet, LOG_PID, LOG_DAEMON);
 
 	if ((tmp = getenv("SSD_NICELEVEL")))
 		if (sscanf(tmp, "%d", &nicelevel) != 1)
@@ -405,7 +398,7 @@ int main(int argc, char **argv)
 		    (int *) 0)) != -1)
 		switch (opt) {
 		case LONGOPT_CAPABILITIES:
-#ifdef __linux__
+#ifdef HAVE_CAP
 			cap_iab = cap_iab_from_text(optarg);
 			if (cap_iab == NULL)
 				eerrorx("Could not parse iab: %s", strerror(errno));
@@ -415,7 +408,7 @@ int main(int argc, char **argv)
 			break;
 
 		case LONGOPT_SECBITS:
-#ifdef __linux__
+#ifdef HAVE_CAP
 			if (*optarg == '\0')
 				eerrorx("Secbits are empty");
 
@@ -748,7 +741,7 @@ int main(int argc, char **argv)
 		fp = fopen(exec_file, "r");
 		if (fp) {
 			line = NULL;
-			if (xgetline(&line, &size, fp) == -1)
+			if (getline(&line, &size, fp) == -1)
 				eerrorx("%s: %s", applet, strerror(errno));
 			p = line;
 			fclose(fp);
@@ -757,6 +750,10 @@ int main(int argc, char **argv)
 				/* Strip leading spaces */
 				while (*p == ' ' || *p == '\t')
 					p++;
+				/* Remove the trailing newline */
+				len = strlen(p) - 1;
+				if (p[len] == '\n')
+					p[len] = '\0';
 				token = strsep(&p, " ");
 				free(exec_file);
 				xasprintf(&exec_file, "%s", token);
@@ -954,7 +951,7 @@ int main(int argc, char **argv)
 		if (changeuser && initgroups(changeuser, gid))
 			eerrorx("%s: initgroups (%s, %d)",
 			    applet, changeuser, gid);
-#ifdef __linux__
+#ifdef HAVE_CAP
 		if (uid && cap_setuid(uid))
 #else
 		if (uid && setuid(uid))
@@ -965,7 +962,7 @@ int main(int argc, char **argv)
 		/* Close any fd's to the passwd database */
 		endpwent();
 
-#ifdef __linux__
+#ifdef HAVE_CAP
 		if (cap_iab != NULL) {
 			i = cap_iab_set_proc(cap_iab);
 
@@ -1126,7 +1123,7 @@ int main(int argc, char **argv)
 			if (sched_prio == -1)
 				sched.sched_priority = sched_get_priority_min(scheduler_index);
 
-			if (pthread_setschedparam(pthread_self(), scheduler_index, &sched))
+			if (sched_setscheduler(mypid, scheduler_index, &sched))
 				eerrorx("Failed to set scheduler: %s", strerror(errno));
 		} else if (sched_prio != -1) {
 			const struct sched_param sched =  {.sched_priority = sched_prio};

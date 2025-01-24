@@ -140,7 +140,8 @@ rc_find_pids(const char *exec, const char *const *argv, uid_t uid, pid_t pid)
 	if (exists("/proc/self/status")) {
 		fp = fopen("/proc/self/status", "r");
 		if (fp) {
-			while (xgetline(&line, &len, fp) != -1) {
+			while (!feof(fp)) {
+				rc_getline(&line, &len, fp);
 				if (strncmp(line, "envID:\t0", 8) == 0) {
 					openvz_host = true;
 					break;
@@ -195,7 +196,8 @@ rc_find_pids(const char *exec, const char *const *argv, uid_t uid, pid_t pid)
 				free(buffer);
 				if (!fp)
 					continue;
-				while (xgetline(&line, &len, fp) != -1) {
+				while (!feof(fp)) {
+					rc_getline(&line, &len, fp);
 					if (strncmp(line, "envID:", 6) == 0) {
 						container_pid = !(strncmp(line, "envID:\t0", 8) == 0);
 						break;
@@ -344,7 +346,7 @@ _match_daemon(const char *path, const char *file, RC_STRINGLIST *match)
 	if (!fp)
 		return false;
 
-	while (xgetline(&line, &len, fp) != -1) {
+	while ((rc_getline(&line, &len, fp))) {
 		TAILQ_FOREACH(m, match, entries)
 		    if (strcmp(line, m->value) == 0) {
 			    TAILQ_REMOVE(match, m, entries);
@@ -409,7 +411,7 @@ rc_service_daemon_set(const char *service, const char *exec,
 		return false;
 	}
 
-	xasprintf(&dirpath, "%s/daemons/%s", rc_svcdir(), basename_c(service));
+	xasprintf(&dirpath, RC_SVCDIR "/daemons/%s", basename_c(service));
 
 	/* Regardless, erase any existing daemon info */
 	if ((dp = opendir(dirpath))) {
@@ -489,7 +491,7 @@ rc_service_started_daemon(const char *service,
 	if (!service || !exec)
 		return false;
 
-	xasprintf(&dirpath, "%s/daemons/%s", rc_svcdir(), basename_c(service));
+	xasprintf(&dirpath, RC_SVCDIR "/daemons/%s", basename_c(service));
 	match = _match_list(exec, argv, NULL);
 
 	if (indx > 0) {
@@ -541,8 +543,8 @@ rc_service_daemons_crashed(const char *service)
 	char *ch_root;
 	char *spidfile;
 
-	path += snprintf(dirpath, sizeof(dirpath),
-			"%s/daemons/%s", rc_svcdir(), basename_c(service));
+	path += snprintf(dirpath, sizeof(dirpath), RC_SVCDIR "/daemons/%s",
+	    basename_c(service));
 
 	if (!(dp = opendir(dirpath)))
 		return false;
@@ -557,7 +559,7 @@ rc_service_daemons_crashed(const char *service)
 		if (!fp)
 			break;
 
-		while (xgetline(&line, &len, fp) != -1) {
+		while ((rc_getline(&line, &len, fp))) {
 			p = line;
 			if ((token = strsep(&p, "=")) == NULL || !p)
 				continue;

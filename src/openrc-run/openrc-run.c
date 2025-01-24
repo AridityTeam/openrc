@@ -54,6 +54,8 @@
 #include "_usage.h"
 #include "helpers.h"
 
+#define PREFIX_LOCK	RC_SVCDIR "/prefix.lock"
+
 #define WAIT_INTERVAL	20000000	/* usecs to poll the lock file */
 #define WAIT_TIMEOUT	60		/* seconds until we timeout */
 #define WARN_TIMEOUT	10		/* warn about this every N seconds */
@@ -90,7 +92,7 @@ static RC_STRINGLIST *use_services;
 static RC_STRINGLIST *want_services;
 static RC_HOOK hook_out;
 static int exclusive_fd = -1, master_tty = -1;
-static bool sighup, skip_mark, in_background, deps, dry_run;
+static bool sighup, in_background, deps, dry_run;
 static pid_t service_pid;
 static int signal_pipe[2] = { -1, -1 };
 
@@ -113,10 +115,6 @@ handle_signal(int sig)
 	switch (sig) {
 	case SIGHUP:
 		sighup = true;
-		break;
-
-	case SIGUSR1:
-		skip_mark = true;
 		break;
 
 	case SIGCHLD:
@@ -167,7 +165,7 @@ unhotplug(void)
 {
 	char *file = NULL;
 
-	xasprintf(&file, "%s/hotplugged/%s", rc_svcdir(), applet);
+	xasprintf(&file, RC_SVCDIR "/hotplugged/%s", applet);
 	if (exists(file) && unlink(file) != 0)
 		eerror("%s: unlink `%s': %s", applet, file, strerror(errno));
 	free(file);
@@ -286,7 +284,6 @@ write_prefix(const char *buffer, size_t bytes, bool *prefixed)
 	size_t i, j;
 	const char *ec = ecolor(ECOLOR_HILITE);
 	const char *ec_normal = ecolor(ECOLOR_NORMAL);
-	char *prefix_lock;
 	ssize_t ret = 0;
 	int fd = fileno(stdout), lock_fd = -1;
 
@@ -294,9 +291,7 @@ write_prefix(const char *buffer, size_t bytes, bool *prefixed)
 	 * Lock the prefix.
 	 * open() may fail here when running as user, as RC_SVCDIR may not be writable.
 	 */
-	xasprintf(&prefix_lock, "%s/prefix.lock", rc_svcdir());
-	lock_fd = open(prefix_lock, O_WRONLY | O_CREAT, 0664);
-	free(prefix_lock);
+	lock_fd = open(PREFIX_LOCK, O_WRONLY | O_CREAT, 0664);
 
 	if (lock_fd != -1) {
 		while (flock(lock_fd, LOCK_EX) != 0) {
@@ -337,18 +332,6 @@ write_prefix(const char *buffer, size_t bytes, bool *prefixed)
 	close(lock_fd);
 
 	return ret;
-}
-
-static int
-openrc_sh_exec(const char *openrc_sh, const char *arg1, const char *arg2)
-{
-	if (arg2)
-		einfov("Executing: %s %s %s %s %s", openrc_sh, openrc_sh, service, arg1, arg2);
-	else
-		einfov("Executing: %s %s %s %s", openrc_sh, openrc_sh, service, arg1);
-	execl(openrc_sh, openrc_sh, service, arg1, arg2, (char *) NULL);
-	eerror("%s: exec '%s': %s", service, openrc_sh, strerror(errno));
-	_exit(EXIT_FAILURE);
 }
 
 static int
@@ -402,20 +385,44 @@ svc_exec(const char *arg1, const char *arg2)
 	if (service_pid == -1)
 		eerrorx("%s: fork: %s", service, strerror(errno));
 	if (service_pid == 0) {
-		char *openrc_sh;
-		xasprintf(&openrc_sh, "%s/openrc-run.sh", rc_svcdir());
-
 		if (slave_tty >= 0) {
 			dup2(slave_tty, STDOUT_FILENO);
 			dup2(slave_tty, STDERR_FILENO);
 		}
 
-		if (exists(openrc_sh))
-			openrc_sh_exec(openrc_sh, arg1, arg2);
-		else
-			openrc_sh_exec(RC_LIBEXECDIR "/sh/openrc-run.sh", arg1, arg2);
-
-		/* UNREACHABLE */
+		if (exists(RC_SVCDIR "/openrc-run.sh")) {
+			if (arg2)
+				einfov("Executing: %s %s %s %s %s",
+					RC_SVCDIR "/openrc-run.sh", RC_SVCDIR "/openrc-run.sh",
+					service, arg1, arg2);
+			else
+				einfov("Executing: %s %s %s %s",
+					RC_SVCDIR "/openrc-run.sh", RC_SVCDIR "/openrc-run.sh",
+					service, arg1);
+			execl(RC_SVCDIR "/openrc-run.sh",
+			    RC_SVCDIR "/openrc-run.sh",
+			    service, arg1, arg2, (char *) NULL);
+			eerror("%s: exec `" RC_SVCDIR "/openrc-run.sh': %s",
+			    service, strerror(errno));
+			_exit(EXIT_FAILURE);
+		} else {
+			if (arg2)
+				einfov("Executing: %s %s %s %s %s",
+					RC_LIBEXECDIR "/sh/openrc-run.sh",
+					RC_LIBEXECDIR "/sh/openrc-run.sh",
+			    	service, arg1, arg2);
+			else
+				einfov("Executing: %s %s %s %s",
+					RC_LIBEXECDIR "/sh/openrc-run.sh",
+					RC_LIBEXECDIR "/sh/openrc-run.sh",
+			    	service, arg1);
+			execl(RC_LIBEXECDIR "/sh/openrc-run.sh",
+			    RC_LIBEXECDIR "/sh/openrc-run.sh",
+			    service, arg1, arg2, (char *) NULL);
+			eerror("%s: exec `" RC_LIBEXECDIR "/sh/openrc-run.sh': %s",
+			    service, strerror(errno));
+			_exit(EXIT_FAILURE);
+		}
 	}
 
 	buffer = xmalloc(sizeof(char) * BUFSIZ);
@@ -501,7 +508,7 @@ svc_wait(const char *svc)
 		forever = true;
 	rc_stringlist_free(keywords);
 
-	xasprintf(&file, "%s/exclusive/%s", rc_svcdir(), basename_c(svc));
+	xasprintf(&file, RC_SVCDIR "/exclusive/%s", basename_c(svc));
 
 	interval.tv_sec = 0;
 	interval.tv_nsec = WAIT_INTERVAL;
@@ -795,7 +802,6 @@ static void svc_start_real(void)
 		setenv("IN_BACKGROUND", ibsave, 1);
 	hook_out = RC_HOOK_SERVICE_START_DONE;
 	rc_plugin_run(RC_HOOK_SERVICE_START_NOW, applet);
-	skip_mark = false;
 	started = (svc_exec("start", NULL) == 0);
 	if (ibsave)
 		unsetenv("IN_BACKGROUND");
@@ -805,8 +811,7 @@ static void svc_start_real(void)
 	else if (!started)
 		eerrorx("ERROR: %s failed to start", applet);
 
-	if (!skip_mark)
-		rc_service_mark(service, RC_SERVICE_STARTED);
+	rc_service_mark(service, RC_SERVICE_STARTED);
 	exclusive_fd = svc_unlock(applet, exclusive_fd);
 	hook_out = RC_HOOK_SERVICE_START_OUT;
 	rc_plugin_run(RC_HOOK_SERVICE_START_DONE, applet);
@@ -1003,7 +1008,6 @@ svc_stop_real(void)
 		setenv("IN_BACKGROUND", ibsave, 1);
 	hook_out = RC_HOOK_SERVICE_STOP_DONE;
 	rc_plugin_run(RC_HOOK_SERVICE_STOP_NOW, applet);
-	skip_mark = false;
 	stopped = (svc_exec("stop", NULL) == 0);
 	if (ibsave)
 		unsetenv("IN_BACKGROUND");
@@ -1011,12 +1015,11 @@ svc_stop_real(void)
 	if (!stopped)
 		eerrorx("ERROR: %s failed to stop", applet);
 
-	if (!skip_mark) {
-		if (in_background)
-		    rc_service_mark(service, RC_SERVICE_INACTIVE);
-		else
-		    rc_service_mark(service, RC_SERVICE_STOPPED);
-	}
+	if (in_background)
+		rc_service_mark(service, RC_SERVICE_INACTIVE);
+	else
+		rc_service_mark(service, RC_SERVICE_STOPPED);
+
 	hook_out = RC_HOOK_SERVICE_STOP_OUT;
 	rc_plugin_run(RC_HOOK_SERVICE_STOP_DONE, applet);
 	hook_out = 0;
@@ -1099,7 +1102,6 @@ int main(int argc, char **argv)
 	char *path = NULL;
 	char *lnk = NULL;
 	char *dir, *save = NULL, *saveLnk = NULL;
-	const char *workingdir = "/";
 	char *pidstr = NULL;
 	size_t l = 0, ll;
 	const char *file;
@@ -1119,8 +1121,7 @@ int main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
-	if (rc_yesno(getenv("RC_USER_SERVICES")))
-		rc_set_user();
+	atexit(cleanup);
 
 	/* We need to work out the real full path to our service.
 	 * This works fine, provided that we ONLY allow multiplexed services
@@ -1162,53 +1163,9 @@ int main(int argc, char **argv)
 	if (argc < 3)
 		usage(EXIT_FAILURE);
 
-	/* Ok, we are ready to go, so setup selinux if applicable */
-	selinux_setup(argv);
-
-	deps = true;
-
-	/* Punt the first arg as its our service name */
-	argc--;
-	argv++;
-
-	/* Right then, parse any options there may be */
-	while ((opt = getopt_long(argc, argv, getoptstring,
-		    longopts, (int *)0)) != -1)
-		switch (opt) {
-		case 'd':
-			setenv("RC_DEBUG", "YES", 1);
-			break;
-		case 'l':
-			exclusive_fd = atoi(optarg);
-			fcntl(exclusive_fd, F_SETFD,
-			    fcntl(exclusive_fd, F_GETFD, 0) | FD_CLOEXEC);
-			break;
-		case 's':
-			if (!(rc_service_state(service) & RC_SERVICE_STARTED))
-				exit(EXIT_FAILURE);
-			break;
-		case 'S':
-			if (!(rc_service_state(service) & RC_SERVICE_STOPPED))
-				exit(EXIT_FAILURE);
-			break;
-		case 'D':
-			deps = false;
-			break;
-		case 'Z':
-			dry_run = true;
-			break;
-		case_RC_COMMON_GETOPT
-		}
-
-	/* Change dir to / to ensure all init scripts don't use stuff in pwd
-	 * For user services, change to the user's HOME instead. */
-	if (rc_is_user() && !(workingdir = getenv("HOME")))
-		eerrorx("HOME is unset.");
-
-	if (chdir(workingdir) == -1)
+	/* Change dir to / to ensure all init scripts don't use stuff in pwd */
+	if (chdir("/") == -1)
 		eerror("chdir: %s", strerror(errno));
-
-	atexit(cleanup);
 
 	if ((runlevel = xstrdup(getenv("RC_RUNLEVEL"))) == NULL) {
 		env_filter();
@@ -1253,6 +1210,44 @@ int main(int argc, char **argv)
 		eprefix(prefix);
 	}
 
+	/* Ok, we are ready to go, so setup selinux if applicable */
+	selinux_setup(argv);
+
+	deps = true;
+
+	/* Punt the first arg as its our service name */
+	argc--;
+	argv++;
+
+	/* Right then, parse any options there may be */
+	while ((opt = getopt_long(argc, argv, getoptstring,
+		    longopts, (int *)0)) != -1)
+		switch (opt) {
+		case 'd':
+			setenv("RC_DEBUG", "YES", 1);
+			break;
+		case 'l':
+			exclusive_fd = atoi(optarg);
+			fcntl(exclusive_fd, F_SETFD,
+			    fcntl(exclusive_fd, F_GETFD, 0) | FD_CLOEXEC);
+			break;
+		case 's':
+			if (!(rc_service_state(service) & RC_SERVICE_STARTED))
+				exit(EXIT_FAILURE);
+			break;
+		case 'S':
+			if (!(rc_service_state(service) & RC_SERVICE_STOPPED))
+				exit(EXIT_FAILURE);
+			break;
+		case 'D':
+			deps = false;
+			break;
+		case 'Z':
+			dry_run = true;
+			break;
+		case_RC_COMMON_GETOPT
+		}
+
 	if (rc_yesno(getenv("RC_NODEPS")))
 		deps = false;
 
@@ -1280,7 +1275,6 @@ int main(int argc, char **argv)
 
 	/* Setup a signal handler */
 	signal_setup(SIGHUP, handle_signal);
-	signal_setup(SIGUSR1, handle_signal);
 	signal_setup(SIGINT, handle_signal);
 	signal_setup(SIGQUIT, handle_signal);
 	signal_setup(SIGTERM, handle_signal);

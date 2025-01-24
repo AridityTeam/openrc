@@ -112,7 +112,6 @@ static const char *const color_terms[] = {
 	"console",
 	"cygwin",
 	"dtterm",
-	"foot",
 	"gnome",
 	"konsole",
 	"kterm",
@@ -133,7 +132,6 @@ static const char *const color_terms[] = {
 	"wsvt25",
 	"xterm",
 	"xterm-debian",
-	"xterm-kitty",
 	NULL
 };
 

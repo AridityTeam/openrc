@@ -45,9 +45,6 @@ int main(int argc, char **argv)
 	if (service == NULL || *service == '\0')
 		eerrorx("%s: no service specified", applet);
 
-	if (rc_yesno(getenv("RC_USER_SERVICES")))
-		rc_set_user();
-
 	if (!strncmp(applet, "mark_", 5) &&
 	    (bit = lookup_service_state(applet + 5)))
 		ok = rc_service_mark(service, bit);
@@ -66,7 +63,7 @@ int main(int argc, char **argv)
 	if (ok && svcname && strcmp(svcname, service) == 0) {
 		openrc_pid = getenv("RC_OPENRC_PID");
 		if (openrc_pid && sscanf(openrc_pid, "%d", &pid) == 1)
-			if (kill(pid, SIGUSR1) != 0)
+			if (kill(pid, SIGHUP) != 0)
 				eerror("%s: failed to signal parent %d: %s",
 				    applet, pid, strerror(errno));
 

@@ -327,7 +327,7 @@ find_mounts(struct args *args)
 	list = rc_stringlist_new();
 
 	buffer = NULL;
-	while (xgetline(&buffer, &size, fp) != -1) {
+	while (getline(&buffer, &size, fp) != -1) {
 		netdev = -1;
 		p = buffer;
 		from = strsep(&p, " ");

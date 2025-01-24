@@ -4,24 +4,12 @@ OpenRC NEWS
 This file will contain a list of notable changes for each release. Note
 the information in this file is in reverse order.
 
-## OpenRC 0.56
+## OpenRC 0.54.2
 
-openrc-run now respects using SIGUSR1 to skip marking a service stopped/started.
-
-RC_ULIMIT now supports setting multiple limits at once.
-
-## OpenRC 0.55
-
-OpenRC now supports shared mounts in fstab. This is used for some containers
-which might require  hierarchies to be mounted with different
-propegation than the kernel default of private.
-
-
-Podman containers now can be autodetected.
-
-The openrc-service-script-completion bash completion file has been
-removed since it doesn't work well with modern bash completion which
-prefers lazy loading.
+The openrc-service-script completion does not work with lazy loading
+bash completions since there is no openrc-service-script command.
+This completion is dropped in this release.
+However, completions for the rc-service command give the same result.
 
 ## OpenRC 0.54
 

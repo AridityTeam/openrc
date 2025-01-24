@@ -102,12 +102,36 @@ rc_getfile(const char *file, char **buffer, size_t *len)
 	return ret;
 }
 
+ssize_t
+rc_getline(char **line, size_t *len, FILE *fp)
+{
+	char *p;
+	size_t last = 0;
+
+	while (!feof(fp)) {
+		if (*line == NULL || last != 0) {
+			*len += BUFSIZ;
+			*line = xrealloc(*line, *len);
+		}
+		p = *line + last;
+		memset(p, 0, BUFSIZ);
+		if (fgets(p, BUFSIZ, fp) == NULL)
+			break;
+		last += strlen(p);
+		if (last && (*line)[last - 1] == '\n') {
+			(*line)[last - 1] = '\0';
+			break;
+		}
+	}
+	return last;
+}
+
 char *
 rc_proc_getent(const char *ent RC_UNUSED)
 {
 #ifdef __linux__
 	FILE *fp;
-	char *proc = NULL, *p, *value = NULL, *save;
+	char *proc, *p, *value = NULL;
 	size_t i, len;
 
 	if (!exists("/proc/cmdline"))
@@ -116,20 +140,23 @@ rc_proc_getent(const char *ent RC_UNUSED)
 	if (!(fp = fopen("/proc/cmdline", "r")))
 		return NULL;
 
+	proc = NULL;
 	i = 0;
-	if (xgetline(&proc, &i, fp) == -1) {
-		free(proc);
+	if (rc_getline(&proc, &i, fp) == -1 || proc == NULL)
 		return NULL;
-	}
-	save = proc;
 
-	len = strlen(ent);
-	while ((p = strsep(&save, " "))) {
-		if (strncmp(ent, p, len) == 0 && (p[len] == '\0' || p[len] == ' ' || p[len] == '=')) {
-			p += len;
-			if (*p == '=')
-				p++;
-			value = xstrdup(p);
+	if (proc != NULL) {
+		len = strlen(ent);
+
+		while ((p = strsep(&proc, " "))) {
+			if (strncmp(ent, p, len) == 0 && (p[len] == '\0' || p[len] == ' ' || p[len] == '=')) {
+				p += len;
+
+				if (*p == '=')
+					p++;
+
+				value = xstrdup(p);
+			}
 		}
 	}
 
@@ -158,7 +185,7 @@ rc_config_list(const char *file)
 	if (!(fp = fopen(file, "r")))
 		return list;
 
-	while (xgetline(&buffer, &len, fp) != -1) {
+	while ((rc_getline(&buffer, &len, fp))) {
 		p = buffer;
 		/* Strip leading spaces/tabs */
 		while ((*p == ' ') || (*p == '\t'))
@@ -301,18 +328,17 @@ static RC_STRINGLIST *rc_config_kcl(RC_STRINGLIST *config)
 	return config;
 }
 
-static RC_STRINGLIST * rc_config_directory(RC_STRINGLIST *config, const char *dir)
+static RC_STRINGLIST * rc_config_directory(RC_STRINGLIST *config)
 {
 	DIR *dp;
 	struct dirent *d;
-	RC_STRINGLIST *rc_conf_d_files;
+	RC_STRINGLIST *rc_conf_d_files = rc_stringlist_new();
 	RC_STRING *fname;
 	RC_STRINGLIST *rc_conf_d_list;
 	char path[PATH_MAX];
 	RC_STRING *line;
 
-	if ((dp = opendir(dir)) != NULL) {
-		rc_conf_d_files = rc_stringlist_new();
+	if ((dp = opendir(RC_CONF_D)) != NULL) {
 		while ((d = readdir(dp)) != NULL) {
 			if (fnmatch("*.conf", d->d_name, FNM_PATHNAME) == 0) {
 				rc_stringlist_addu(rc_conf_d_files, d->d_name);
@@ -320,21 +346,21 @@ static RC_STRINGLIST * rc_config_directory(RC_STRINGLIST *config, const char *di
 		}
 		closedir(dp);
 
-		rc_stringlist_sort(&rc_conf_d_files);
-		TAILQ_FOREACH(fname, rc_conf_d_files, entries) {
-			if (!fname->value)
-				continue;
-			sprintf(path, "%s/%s", dir, fname->value);
-			rc_conf_d_list = rc_config_list(path);
-			TAILQ_FOREACH(line, rc_conf_d_list, entries)
-				if (line->value)
-					rc_config_set_value(config, line->value);
-			rc_stringlist_free(rc_conf_d_list);
+		if (rc_conf_d_files) {
+			rc_stringlist_sort(&rc_conf_d_files);
+			TAILQ_FOREACH(fname, rc_conf_d_files, entries) {
+				if (!fname->value)
+					continue;
+				sprintf(path, "%s/%s", RC_CONF_D, fname->value);
+				rc_conf_d_list = rc_config_list(path);
+				TAILQ_FOREACH(line, rc_conf_d_list, entries)
+					if (line->value)
+						rc_config_set_value(config, line->value);
+				rc_stringlist_free(rc_conf_d_list);
+			}
+			rc_stringlist_free(rc_conf_d_files);
 		}
-
-		rc_stringlist_free(rc_conf_d_files);
 	}
-
 	return config;
 }
 
@@ -383,61 +409,35 @@ _free_rc_conf(void)
 	rc_stringlist_free(rc_conf);
 }
 
-static void
-rc_conf_append(const char *file)
-{
-	RC_STRINGLIST *conf = rc_config_load(file);
-	TAILQ_CONCAT(rc_conf, conf, entries);
-	rc_stringlist_free(conf);
-}
-
 char *
 rc_conf_value(const char *setting)
 {
-	const char *sysconfdir = rc_sysconfdir();
-	const char *usrconfdir = rc_usrconfdir();
+	RC_STRINGLIST *old;
 	RC_STRING *s;
-	char *conf;
+	char *p;
 
-	if (rc_conf)
-		return rc_config_value(rc_conf, setting);
+	if (!rc_conf) {
+		rc_conf = rc_config_load(RC_CONF);
+		atexit(_free_rc_conf);
 
-	rc_conf = rc_stringlist_new();
-	atexit(_free_rc_conf);
+		/* Support old configs. */
+		if (exists(RC_CONF_OLD)) {
+			old = rc_config_load(RC_CONF_OLD);
+			TAILQ_CONCAT(rc_conf, old, entries);
+			rc_stringlist_free(old);
+		}
 
-	/* Load user configurations first, as they should override
-	 * system wide configs. */
-	if (usrconfdir) {
-		xasprintf(&conf, "%s/%s", usrconfdir, "rc.conf");
-		rc_conf_append(conf);
-		free(conf);
+		rc_conf = rc_config_directory(rc_conf);
+		rc_conf = rc_config_kcl(rc_conf);
 
-		xasprintf(&conf, "%s/%s", usrconfdir, "rc.conf.d");
-		rc_conf = rc_config_directory(rc_conf, conf);
-		free(conf);
-	}
-
-	xasprintf(&conf, "%s/%s", sysconfdir, "rc.conf");
-	rc_conf_append(sysconfdir);
-	free(conf);
-
-	/* Support old configs. */
-	if (exists(RC_CONF_OLD))
-		rc_conf_append(RC_CONF_OLD);
-
-	xasprintf(&conf, "%s/%s", sysconfdir, "rc.conf.d");
-	rc_conf = rc_config_directory(rc_conf, conf);
-	free(conf);
-
-	rc_conf = rc_config_kcl(rc_conf);
-
-	/* Convert old uppercase to lowercase */
-	TAILQ_FOREACH(s, rc_conf, entries) {
-		char *p = s->value;
-		while (p && *p && *p != '=') {
-			if (isupper((unsigned char)*p))
-				*p = tolower((unsigned char)*p);
-			p++;
+		/* Convert old uppercase to lowercase */
+		TAILQ_FOREACH(s, rc_conf, entries) {
+			p = s->value;
+			while (p && *p && *p != '=') {
+				if (isupper((unsigned char)*p))
+					*p = tolower((unsigned char)*p);
+				p++;
+			}
 		}
 	}
 

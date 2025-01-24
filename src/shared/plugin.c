@@ -46,6 +46,20 @@ typedef struct plugin
 } PLUGIN;
 TAILQ_HEAD(, plugin) plugins;
 
+#ifndef __FreeBSD__
+dlfunc_t
+dlfunc(void * __restrict handle, const char * __restrict symbol)
+{
+	union {
+		void *d;
+		dlfunc_t f;
+	} rv;
+
+	rv.d = dlsym(handle, symbol);
+	return rv.f;
+}
+#endif
+
 void
 rc_plugin_load(void)
 {
@@ -54,10 +68,7 @@ rc_plugin_load(void)
 	PLUGIN *plugin;
 	char *file = NULL;
 	void *h;
-	union {
-		void *sym;
-		int (*func)(RC_HOOK, const char *);
-	} fptr;
+	int (*fptr)(RC_HOOK, const char *);
 
 	/* Don't load plugins if we're in one */
 	if (rc_in_plugin)
@@ -80,8 +91,9 @@ rc_plugin_load(void)
 			continue;
 		}
 
-		fptr.sym = dlsym(h, RC_PLUGIN_HOOK);
-		if (fptr.func == NULL) {
+		fptr = (int (*)(RC_HOOK, const char *))
+		    dlfunc(h, RC_PLUGIN_HOOK);
+		if (fptr == NULL) {
 			eerror("%s: cannot find symbol `%s'",
 			    d->d_name, RC_PLUGIN_HOOK);
 			dlclose(h);
@@ -89,7 +101,7 @@ rc_plugin_load(void)
 			plugin = xmalloc(sizeof(*plugin));
 			plugin->name = xstrdup(d->d_name);
 			plugin->handle = h;
-			plugin->hook = fptr.func;
+			plugin->hook = fptr;
 			TAILQ_INSERT_TAIL(&plugins, plugin, entries);
 		}
 	}

@@ -1,15 +1,12 @@
 project('OpenRC', 'c',
-  version : '0.56',
+  version : '0.54.2',
   license: 'BSD-2',
   default_options : [
-    'bindir=/bin',
     'c_std=c99',
     'prefix=/usr',
-    'sbindir=/sbin',
     'warning_level=3',
     ],
-  meson_version : '>=0.62.0'
-)
+  meson_version : '>=0.53.2')
 
 cc = meson.get_compiler('c')
 fs = import('fs')
@@ -47,10 +44,8 @@ else
 endif
 
 if os != 'Linux'
-  cap_dep = []
-  kvm_dep = cc.find_library('kvm')
+  kvm_dep = cc.find_library('kvm', required: true)
 else
-  cap_dep = dependency('libcap', version: '>=2.33')
   kvm_dep = []
 endif
 
@@ -68,6 +63,13 @@ if not pam_dep.found() and get_option('pam')
   error('Pam was requested but could not be located')
 endif
 
+cap_dep = dependency('libcap', version: '>=2.33', required : get_option('capabilities'))
+if cap_dep.found()
+  cc_cap_flags = '-DHAVE_CAP'
+else
+  cc_cap_flags = []
+endif
+
 option_pkg_prefix = get_option('pkg_prefix')
 if option_pkg_prefix == ''
   if os == 'Dragonfly' or os == 'FreeBSD'
@@ -81,15 +83,23 @@ else
   pkg_prefix = option_pkg_prefix
 endif
 
-bindir = get_option('prefix') / get_option('bindir')
-libdir = get_option('prefix') / get_option('libdir')
-pluginsdir = libdir / 'rc/plugins'
-libexecdir = get_option('prefix') / get_option('libexecdir')
+rootprefix = get_option('rootprefix')
+if rootprefix == ''
+rootprefix = '/'
+endif
+
+bindir = rootprefix / get_option('bindir')
+libdir = rootprefix / get_option('libdir')
+libexecdir = get_option('libexecdir')
+if os == 'Linux' and libexecdir == 'libexec'
+  libexecdir = 'lib'
+endif
+libexecdir = rootprefix / libexecdir
 rc_libexecdir = libexecdir / 'rc'
 rc_bindir = rc_libexecdir / 'bin'
 rc_sbindir = rc_libexecdir / 'sbin'
 rc_shdir = rc_libexecdir / 'sh'
-sbindir = get_option('prefix') / get_option('sbindir')
+sbindir = rootprefix / get_option('sbindir')
 pamdir = get_option('sysconfdir') / 'pam.d'
 
 crypt_dep = []
@@ -127,7 +137,7 @@ if os == 'Linux' or os == 'GNU-kFreeBSD'
 elif os == 'FreeBSD'
   cc_os_flags = ['-D_BSD_SOURCE']
 elif os == 'GNU'
-  cc_os_flags = ['-D_DEFAULT_SOURCE', '-DPATH_MAX=4096']
+  cc_os_flags = ['-D_DEFAULT_SOURCE', '-DMAXPATHLEN=4096', '-DPATH_MAX=4096']
 endif
 
 # Try and use some good cc flags if we're building from git. We don't use
@@ -141,7 +151,6 @@ cc_warning_flags_test = [
   '-Wdeclaration-after-statement',
   '-Wformat=2',
   '-Winline',
-  '-Wmismatched-dealloc',
   '-Wmissing-declarations',
   '-Wmissing-format-attribute',
   '-Wmissing-noreturn',
@@ -198,34 +207,13 @@ subdir('etc')
 subdir('init.d')
 subdir('local.d')
 subdir('man')
+subdir('pkgconfig')
 subdir('sh')
 subdir('src')
 subdir('support')
 subdir('sysctl.d')
 subdir('test')
 subdir('zsh-completion')
-
-if get_option('pkgconfig')
-  pkg = import('pkgconfig')
-
-  einfo_pkgconf = pkg.generate(
-    name : 'einfo',
-    description : 'Pretty console informational display',
-    version : meson.project_version(),
-    libraries : libeinfo,
-  )
-
-  openrc_pkgconf = pkg.generate(
-    name : 'OpenRC',
-    filebase : 'openrc',
-    description : 'Universal init system',
-    version : meson.project_version(),
-    libraries : librc,
-    variables: {
-      'pluginsdir': pluginsdir,
-    }
-  )
-endif
 
 meson.add_install_script('tools/meson_runlevels.sh',
   os,
@@ -235,4 +223,6 @@ meson.add_install_script('tools/meson_runlevels.sh',
   get_option('sysvinit') ? 'yes' : 'no')
 meson.add_install_script('tools/meson_final.sh',
   rc_libexecdir,
-  os)
+  sbindir,
+  os,
+  get_option('sysvinit') ? 'yes' : 'no')

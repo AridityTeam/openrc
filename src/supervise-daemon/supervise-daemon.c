@@ -54,7 +54,7 @@
 static struct pam_conv conv = { NULL, NULL};
 #endif
 
-#ifdef __linux__
+#ifdef HAVE_CAP
 #include <sys/capability.h>
 #endif
 
@@ -182,7 +182,7 @@ static int fifo_fd = 0;
 static char *pidfile = NULL;
 static char *svcname = NULL;
 static bool verbose = false;
-#ifdef __linux__
+#ifdef HAVE_CAP
 static cap_iab_t cap_iab = NULL;
 static unsigned secbits = 0;
 #endif
@@ -443,7 +443,7 @@ RC_NORETURN static void child_process(char *exec, char **argv)
 		eerrorx("%s: unable to set groupid to %d", applet, gid);
 	if (changeuser && initgroups(changeuser, gid))
 		eerrorx("%s: initgroups (%s, %d)", applet, changeuser, gid);
-#ifdef __linux__
+#ifdef HAVE_CAP
 	if (uid && cap_setuid(uid))
 #else
 	if (uid && setuid(uid))
@@ -453,7 +453,7 @@ RC_NORETURN static void child_process(char *exec, char **argv)
 	/* Close any fd's to the passwd database */
 	endpwent();
 
-#ifdef __linux__
+#ifdef HAVE_CAP
 	if (cap_iab != NULL) {
 		i = cap_iab_set_proc(cap_iab);
 
@@ -823,8 +823,6 @@ int main(int argc, char **argv)
 	svcname = getenv("RC_SVCNAME");
 	if (!svcname)
 		eerrorx("%s: The RC_SVCNAME environment variable is not set", applet);
-	if (rc_yesno(getenv("RC_USER_SERVICES")))
-		rc_set_user();
 	openlog(applet, LOG_PID, LOG_DAEMON);
 
 	if (argc <= 1 || strcmp(argv[1], svcname))
@@ -885,7 +883,7 @@ int main(int argc, char **argv)
 			break;
 
 		case LONGOPT_CAPABILITIES:
-#ifdef __linux__
+#ifdef HAVE_CAP
 			cap_iab = cap_iab_from_text(optarg);
 			if (cap_iab == NULL)
 				eerrorx("Could not parse iab: %s", strerror(errno));
@@ -895,7 +893,7 @@ int main(int argc, char **argv)
 			break;
 
         case LONGOPT_SECBITS:
-#ifdef __linux__
+#ifdef HAVE_CAP
 			if (*optarg == '\0')
 				eerrorx("Secbits are empty");
 
@@ -1087,8 +1085,8 @@ int main(int argc, char **argv)
 
 	umask(numask);
 	if (!pidfile)
-		xasprintf(&pidfile, "%s/supervise-%s.pid", rc_is_user() ? getenv("XDG_RUNTIME_DIR") : "/var/run", svcname);
-	xasprintf(&fifopath, "%s/supervise-%s.ctl", rc_svcdir(), svcname);
+		xasprintf(&pidfile, "/var/run/supervise-%s.pid", svcname);
+	xasprintf(&fifopath, "%s/supervise-%s.ctl", RC_SVCDIR, svcname);
 	if (mkfifo(fifopath, 0600) == -1 && errno != EEXIST)
 		eerrorx("%s: unable to create control fifo: %s",
 				applet, strerror(errno));

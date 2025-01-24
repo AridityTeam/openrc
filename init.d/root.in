@@ -15,13 +15,12 @@ depend()
 {
 	after clock
 	need fsck
-	keyword -docker -podman -jail -lxc -openvz -prefix -systemd-nspawn -vserver
+	keyword -docker -jail -lxc -openvz -prefix -systemd-nspawn -vserver
 }
 
 start()
 {
-	local root_opts=",$(fstabinfo -o /),"
-	case "$root_opts" in
+	case ",$(fstabinfo -o /)," in
 		*,ro,*)
 		;;
 		*)
@@ -43,21 +42,6 @@ start()
 					rm -f /fastboot /forcefsck
 				fi
 			fi
-		;;
-	esac
-
-	case "$root_opts" in
-		*,shared,*|*,rshared,*)
-			ebegin "Making root filesystem shared"
-			case "$RC_UNAME" in
-				Linux)
-					mount --make-rshared /
-				;;
-				*)
-					ewarn "Ignoring 'shared' option for / on non-linux"
-				;;
-			esac
-			eend $? "Root filesystem could not be made shared"
 		;;
 	esac
 

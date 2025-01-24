@@ -131,8 +131,6 @@ static char *get_uptime(const char *service)
 						"%02"PRId64":%02"PRId64":%02"PRId64" (%s)",
 						diff_hours, diff_mins, diff_secs, start_count);
 		}
-		free(start_count);
-		free(start_time_string);
 	}
 	return uptime;
 }
